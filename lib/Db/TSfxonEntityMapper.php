@@ -1,0 +1,671 @@
+<?php declare(strict_types=1);
+
+namespace OCA\SfxonTrain\Db;
+
+use OCP\DB\QueryBuilder\IQueryBuilder;
+
+trait TSfxonEntityMapper
+{
+    /** @var string[] Track applied joins to avoid duplicates per query */
+    private array $appliedJoinAliases = [];
+
+    /** @var array<string, array>|null Static cache for filter field map */
+    protected static ?array $filterFieldMap = null;
+
+    private function applyFilters(IQueryBuilder $qb, array $filters): void
+    {
+        $this->appliedJoinAliases = [];
+        $fieldMap = $this->getFilterFieldMap();
+
+        foreach ($filters as $key => $values) {
+            if (empty($values)) {
+                continue;
+            }
+
+            // Pseudo filters for free-text search: `_search` = terms, `_searchFields` = property names.
+            // A term has to match in at least one of the fields (OR across fields).
+            if ($key === '_searchFields') {
+                continue;
+            }
+
+            if ($key === '_search') {
+                $this->applySearchFilter($qb, $fieldMap, (array)($filters['_searchFields'] ?? []), (array)$values);
+                continue;
+            }
+
+            // JOIN Filter
+            if (isset(self::JOIN_FILTERS[$key])) {
+                $this->applyJoinFilter($qb, self::JOIN_FILTERS[$key], $values);
+                continue;
+            }
+
+            // Normal filter.
+            if (!isset($fieldMap[$key])) {
+                continue;
+            }
+
+            $field = $fieldMap[$key];
+            $column = self::TABLE_ALIAS . '.' . $field['name'];
+
+            $filterType = $field['filterType'] ?? $this->resolveFilterType($field['type']);
+
+            match ($filterType) {
+                'like' => $this->applyLikeFilter($qb, $column, $values),
+                'in' => $this->applyInFilter($qb, $column, $values),
+                'numericFromTo' => $this->applyNumericFromToFilter($qb, $column, $values),
+                'dateFromTo' => $this->applyDateFromToFilter($qb, $column, $values),
+                'none' => null,
+                default => null,
+            };
+        }
+    }
+
+    /**
+     * Free-text search over several fields. Each term must match in at least one field.
+     * Fields are whitelisted via the field definitions and must be 'like' fields.
+     *
+     * @param array<string, array> $fieldMap
+     * @param string[] $propertyNames
+     * @param array $terms
+     */
+    private function applySearchFilter(IQueryBuilder $qb, array $fieldMap, array $propertyNames, array $terms): void
+    {
+        $columns = [];
+
+        foreach ($propertyNames as $property) {
+            $field = $fieldMap[$property] ?? null;
+            if ($field === null) {
+                continue;
+            }
+
+            $filterType = $field['filterType'] ?? $this->resolveFilterType($field['type']);
+            if ($filterType === 'like') {
+                $columns[] = self::TABLE_ALIAS . '.' . $field['name'];
+            }
+        }
+
+        if ($columns === []) {
+            return;
+        }
+
+        foreach ($terms as $term) {
+            $term = trim((string)$term);
+            if ($term === '') {
+                continue;
+            }
+
+            $param = $qb->createNamedParameter('%' . $this->db->escapeLikeParameter(strtolower($term)) . '%');
+            $orX = $qb->expr()->orX();
+
+            foreach ($columns as $column) {
+                $orX->add($qb->expr()->like($qb->func()->lower($column), $param));
+            }
+
+            $qb->andWhere($orX);
+        }
+    }
+
+    private function applyJoinFilter(IQueryBuilder $qb, array $config, mixed $values): void
+    {
+        if (!in_array($config['alias'], $this->appliedJoinAliases, true)) {
+            $qb->leftJoin(self::TABLE_ALIAS, $config['table'], $config['alias'], $config['condition']);
+            $this->appliedJoinAliases[] = $config['alias'];
+        }
+        
+        $values = (array)$values;
+
+        match ($config['handler']) {
+            'in' => $this->applyInFilter($qb, $config['column'], $values),
+            'like' => $this->applyLikeFilter($qb, $config['column'], $values),
+            'dateFromTo' => $this->applyDateFromToFilter($qb, $config['column'], $values),
+            'numericFromTo' => $this->applyNumericFromToFilter($qb, $config['column'], $values),
+            default => null,
+        };
+    }
+
+    /**
+     * Default sort field, used when no orderBy is given or the given one is invalid.
+     * Override in the concrete Mapper class if the entity has no 'name' field.
+     */
+    protected function getDefaultSortField(): string
+    {
+        if (method_exists($this->entityClass, 'getDefaultSortField')) {
+            return $this->entityClass::getDefaultSortField();
+        }
+
+        return 'name';
+    }
+
+    private function getFilterFieldMap(): array
+    {
+        if (static::$filterFieldMap === null) {
+            static::$filterFieldMap = [];
+            foreach ($this->entityClass::getFieldDefinition() as $field) {
+                $key = $field['propertyName'];
+                static::$filterFieldMap[$key] = $field;
+            }
+        }
+        return static::$filterFieldMap;
+    }
+
+    public function countAll(?array $filters = null): int
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select($qb->func()->count('*', 'count'));
+        $qb->from($this->getTableName(), self::TABLE_ALIAS);
+
+        if ($filters !== null) {
+            $this->applyFilters($qb, $filters);
+        }
+
+        return (int) $qb->executeQuery()->fetchOne();
+    }
+
+    public function findAllPaged(
+        string $orderBy = 'name',
+        string $direction = 'ASC',
+        int $limit = 20,
+        int $offset = 0,
+        ?array $filters = null,
+        ?array $include = null ): array
+    {
+        $dir = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
+
+        $qb = $this->db->getQueryBuilder();
+        $qb->select(self::TABLE_ALIAS . '.*')
+            ->from($this->getTableName(), self::TABLE_ALIAS)
+            ->setMaxResults($limit)
+            ->setFirstResult($offset);
+
+        if ($filters !== null) {
+            $this->applyFilters($qb, $filters);
+        }
+
+        if (!$this->applyRelationSort($qb, $orderBy, $dir)) {
+            $fieldMap = $this->getFilterFieldMap();
+            $fieldDef = $fieldMap[$orderBy] ?? null;
+            $field = $fieldDef['name'] ?? $this->getDefaultSortField();
+            $column = self::TABLE_ALIAS . '.' . $field;
+
+            // Nextcloud natively uses binary tables, which means all sortings are case sensitive.
+            // I think it is, because they need to sort filenames like this.
+            // @TODO:
+            // We do not want that, so we do a lower right now. It's not the nicest way and I should add some option later, maybe, to disable this,
+            // because it can become inperformant.
+            $filterType = $fieldDef['filterType'] ?? $this->resolveFilterType($fieldDef['type'] ?? '');
+            $orderExpr = $filterType === 'like' ? $qb->func()->lower($column) : $column;
+
+            $qb->orderBy($orderExpr, $dir)
+                ->addOrderBy(self::TABLE_ALIAS . '.id', 'ASC');
+        }
+
+        $result = $this->findEntities($qb);
+        $relations = [];
+
+        if (null !== $include && !empty($include)) {
+            $relations = $this->loadRelations($result, $include);
+        }
+
+        return [
+            'mainData' => $result,
+            'relations' => $relations,
+        ];
+    }
+
+    public function findById(int $id, ?array $include = null): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
+        $mainData = $this->findEntity($qb);
+
+        $relations = [];
+
+        if (null !== $include && !empty($include)) {
+            $relations = $this->loadRelations([$mainData], $include);
+        }
+
+        return [
+            'mainData' => $mainData,
+            'relations' => $relations,
+        ];
+    }
+
+    public function isEntityValueInUse(string $entityFieldName, int $id): bool {
+        if (!in_array($entityFieldName, $this->allowedEntityIdFields, true)) {
+            throw new \Exception('Entity field name \'' . $entityFieldName . '\' is not allowed.');
+        }
+
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where($qb->expr()->eq($entityFieldName, $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)))
+            ->setMaxResults(1);
+
+        return $qb->executeQuery()->fetchAssociative() !== false;
+    }
+
+    private function applyDateFromToFilter(IQueryBuilder $qb, string $column, array $values, string $toSuffix = ''): void {
+        $from = null;
+        $to = null;
+
+        if (isset($values[0]) && $values[0] !== '' && $values[0] !== null) {
+            $fromTimestamp = strtotime($values[0]);
+            if ($fromTimestamp !== false) {
+                $from = date('Y-m-d', $fromTimestamp);
+            }
+        }
+
+        if (isset($values[1]) && $values[1] !== '' && $values[1] !== null) {
+            $toTimestamp = strtotime($values[1]);
+            if ($toTimestamp !== false) {
+                $to = date('Y-m-d', $toTimestamp);
+            }
+        }
+
+        if ($from === null && $to === null) {
+            return;
+        }
+
+        if ($from !== null) {
+            $qb->andWhere(
+                $qb->expr()->gte($column, $qb->createNamedParameter($from)),
+            );
+        }
+
+        if ($to !== null) {
+            $qb->andWhere(
+                $qb->expr()->lte($column, $qb->createNamedParameter($to . $toSuffix)),
+            );
+        }
+    }
+
+    private function applyInFilter(IQueryBuilder $qb, string $column, array $values): void {
+        $qb->andWhere($qb->expr()->in(
+            $column,
+            $qb->createNamedParameter(
+                array_map('intval', $values),
+                IQueryBuilder::PARAM_INT_ARRAY
+            )
+        ));
+    }
+
+    private function applyLikeFilter(IQueryBuilder $qb, string $column, array $values): void {
+        $orX = $qb->expr()->orX();
+
+        foreach ($values as $value) {
+            $param = $qb->createNamedParameter('%' . $this->db->escapeLikeParameter(strtolower($value)) . '%');
+            $orX->add($qb->expr()->like(
+                $qb->func()->lower($column), 
+                $param
+            ));
+        }
+
+        $qb->andWhere($orX);
+    }
+
+    private function applyNumericFromToFilter(IQueryBuilder $qb, string $column, array $values): void {
+        $from = null;
+        $to = null;
+
+        if (isset($values[0]) && $values[0] !== '' && $values[0] !== null) {
+            $parsed = filter_var($values[0], FILTER_VALIDATE_FLOAT);
+            if ($parsed !== false) {
+                $from = $parsed;
+            }
+        }
+
+        if (isset($values[1]) && $values[1] !== '' && $values[1] !== null) {
+            $parsed = filter_var($values[1], FILTER_VALIDATE_FLOAT);
+            if ($parsed !== false) {
+                $to = $parsed;
+            }
+        }
+
+        if ($from === null && $to === null) {
+            return;
+        }
+
+        if ($from !== null) {
+            $qb->andWhere(
+                $qb->expr()->gte($column, $qb->createNamedParameter($from, IQueryBuilder::PARAM_STR))
+            );
+        }
+
+        if ($to !== null) {
+            $qb->andWhere(
+                $qb->expr()->lte($column, $qb->createNamedParameter($to, IQueryBuilder::PARAM_STR))
+            );
+        }
+    }
+
+    /**
+     * @return bool true if $orderBy was a relation sort and has been applied.
+     */
+    private function applyRelationSort(IQueryBuilder $qb, string $orderBy, string $direction): bool {
+        // Whitelist lookup: user input is only ever used as an array key here.
+        $relation = $this->getRelationSorts()[$orderBy] ?? null;
+        if ($relation === null) {
+            return false;
+        }
+
+        $entityClass = $relation['entity'];
+        if (!is_subclass_of($entityClass, ISortableEntity::class)) {
+            throw new \LogicException($entityClass . ' must implement ISortableEntity');
+        }
+
+        $this->applySortDefinition($qb, $entityClass::getSortDefinition(), $relation['localKey'], $orderBy, $direction);
+
+        return true;
+    }
+
+    private function applySortDefinition(
+        IQueryBuilder $qb,
+        array $definition,
+        string $localKey,
+        string $aliasSeed,
+        string $direction,
+    ): void {
+        // Doctrine appends the direction unvalidated, so it must be normalised explicitly.
+        $direction = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
+
+        // Use 'srt_' prefix avoids collisions with the aliases of JOIN_FILTERS (p, dt, ...).
+        $alias = 'srt_' . preg_replace('/[^a-z0-9]/i', '', $aliasSeed);
+
+        $this->assertSqlIdentifier($alias);
+        $this->assertSqlIdentifier($localKey);
+        $this->assertSqlIdentifier($definition['table']);
+
+        // LEFT JOIN, so rows without a relation stay in the list.
+        $qb->leftJoin(
+            self::TABLE_ALIAS,
+            $definition['table'],
+            $alias,
+            $qb->expr()->eq(self::TABLE_ALIAS . '.' . $localKey, $alias . '.id')
+        );
+
+        $joinAliases = [];
+        foreach ($definition['joins'] ?? [] as $name => $join) {
+            $joinAlias = $alias . '_' . $name;
+            $this->assertSqlIdentifier($joinAlias);
+            $this->assertSqlIdentifier($join['table']);
+            $this->assertSqlIdentifier($join['localKey']);
+
+            $qb->leftJoin(
+                $alias,
+                $join['table'],
+                $joinAlias,
+                $qb->expr()->eq($alias . '.' . $join['localKey'], $joinAlias . '.id')
+            );
+            $joinAliases[$name] = $joinAlias;
+        }
+
+        $first = true;
+
+        foreach ($definition['columns'] as $column) {
+            if (is_array($column)) {
+                $joinName = $column['join'] ?? null;
+
+                if ($joinName !== null && !isset($joinAliases[$joinName])) {
+                    throw new \LogicException('Unknown join in sort definition');
+                }
+
+                $tableAlias = $joinName !== null ? $joinAliases[$joinName] : $alias;
+                $columnName = $column['column'];
+                $isText = $column['text'] ?? true;
+            } else {
+                $tableAlias = $alias;
+                $columnName = $column;
+                $isText = true;
+            }
+            $this->assertSqlIdentifier($columnName);
+
+            $expression = $tableAlias . '.' . $columnName;
+            if ($isText) {
+                $expression = $qb->func()->lower($expression);
+            }
+
+            $first ? $qb->orderBy($expression, $direction) : $qb->addOrderBy($expression, $direction);
+            $first = false;
+        }
+
+        $qb->addOrderBy(self::TABLE_ALIAS . '.id', 'ASC');
+    }
+
+    private function assertSqlIdentifier(string $identifier): void {
+        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $identifier) !== 1) {
+            throw new \LogicException('Invalid SQL identifier');
+        }
+    }
+
+    private function camelToSnake(string $input): string {
+        return strtolower(preg_replace('/[A-Z]/', '_$0', $input));
+    }
+
+    private function loadNestedRelations(array $rows, array $with): array {
+        foreach ($with as $nestedName => $nestedConfig) {
+            $localKey = $nestedConfig['localKey'];
+            $table = $nestedConfig['table'];
+            $fields = $nestedConfig['fields'] ?? ['id', 'name'];
+
+            $nestedIdsIndexed = [];
+
+            foreach ($rows as $row) {
+                if (isset($row[$localKey]) && $row[$localKey] !== null) {
+                    $nestedIdsIndexed[$row[$localKey]] = true;
+                }
+            }
+
+            $nestedIds = array_keys($nestedIdsIndexed);
+
+            if (empty($nestedIds)) {
+                continue;
+            }
+
+            $qb = $this->db->getQueryBuilder();
+            $qb->select($fields)
+                ->from($table)
+                ->where($qb->expr()->in(
+                    'id',
+                    $qb->createNamedParameter($nestedIds, IQueryBuilder::PARAM_INT_ARRAY)
+                ));
+
+            $result = $qb->executeQuery();
+            $nestedIndexed = [];
+
+            while ($row = $result->fetch()) {
+                $nestedIndexed[(int)$row['id']] = $row;
+            }
+
+            $result->closeCursor();
+
+            foreach ($rows as $id => $row) {
+                $nestedId = $row[$localKey] ?? null;
+                $rows[$id][$nestedName] = $nestedId !== null && isset($nestedIndexed[$nestedId])
+                    ? $nestedIndexed[$nestedId]
+                    : null;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Loads all rows of a one-to-many relation with a single IN query and groups them by the id of the main entity.
+     *
+     * Config: ['hasMany' => true, 'table' => 'sfxon_xyz', 'foreignKey' => 'column_pointing_to_main_id', 'fields' => [...]]
+     * Rows are ordered by document_date (rows without date last) and id; document_date only counts if it is part of 'fields'.
+     * The foreign key is always selected for grouping, but removed from the rows again unless it is part of 'fields'.
+     *
+     * @param array $data Loaded main entities
+     * @return array<int, list<array<string, mixed>>> main entity id => rows
+     */
+    private function loadHasManyRelation(array $data, array $config): array {
+        $table = (string)($config['table'] ?? '');
+        $foreignKey = (string)($config['foreignKey'] ?? '');
+        $fields = $config['fields'] ?? ['id'];
+
+        if (!is_array($fields) || $fields === []) {
+            $fields = ['id'];
+        }
+
+        $this->assertSqlIdentifier($table);
+        $this->assertSqlIdentifier($foreignKey);
+
+        // Includes can originate from the request, so a hasMany relation must never leave this app's tables.
+        if (!str_starts_with($table, 'sfxon_')) {
+            throw new \LogicException('Invalid target table for a hasMany relation');
+        }
+
+        $selectFields = [];
+
+        foreach ($fields as $field) {
+            $field = (string)$field;
+            $this->assertSqlIdentifier($field);
+            $selectFields[$field] = $field;
+        }
+
+        $selectFields = array_values($selectFields);
+        $foreignKeyRequested = in_array($foreignKey, $selectFields, true);
+
+        if (!$foreignKeyRequested) {
+            $selectFields[] = $foreignKey;
+        }
+
+        $idsIndexed = [];
+
+        foreach ($data as $d) {
+            $id = $d->getId();
+
+            if ($id !== null) {
+                $idsIndexed[(int)$id] = true;
+            }
+        }
+
+        $ids = array_keys($idsIndexed);
+
+        if (empty($ids)) {
+            return [];
+        }
+
+        $qb = $this->db->getQueryBuilder();
+        $qb->select($selectFields)
+            ->from($table)
+            ->where($qb->expr()->in(
+                $foreignKey,
+                $qb->createNamedParameter($ids, IQueryBuilder::PARAM_INT_ARRAY)
+            ));
+
+        if (in_array('document_date', $selectFields, true)) {
+            // NULL ordering differs between databases, so rows without a date are put last explicitly.
+            $qb->addOrderBy($qb->createFunction('CASE WHEN document_date IS NULL THEN 1 ELSE 0 END'), 'ASC')
+                ->addOrderBy('document_date', 'ASC');
+        }
+
+        $qb->addOrderBy('id', 'ASC');
+
+        $result = $qb->executeQuery();
+        $grouped = [];
+
+        while ($row = $result->fetchAssociative()) {
+            $ownerId = (int)$row[$foreignKey];
+
+            if (!$foreignKeyRequested) {
+                unset($row[$foreignKey]);
+            }
+
+            $grouped[$ownerId][] = $row;
+        }
+
+        $result->closeCursor();
+
+        return $grouped;
+    }
+
+    /**
+     * @param array $data Loaded main entities
+     * @param array $include relation name => config.
+     *        belongsTo (default): ['fields' => [...], 'with' => [...]] - table and foreign key are derived from the relation name.
+     *        hasMany: ['hasMany' => true, 'table' => ..., 'foreignKey' => ..., 'fields' => [...]] - see loadHasManyRelation().
+     */
+    private function loadRelations(array $data, array $include): array {
+        $relations = [];
+    
+        foreach ($include as $relationName => $relationData) {
+            if (is_array($relationData) && !empty($relationData['hasMany'])) {
+                $relations[$relationName] = $this->loadHasManyRelation($data, $relationData);
+                continue;
+            }
+
+            $fields = $relationData['fields'] ?? ['id', 'name'];
+
+            $foreignKey = $relationName . 'Id';
+            $getter = 'get' . ucfirst($foreignKey);
+            $table = 'sfxon_' . $this->camelToSnake($relationName);
+
+            $searchIdsIndexed = [];
+
+            foreach ($data as $d) {
+                if (property_exists($d, $foreignKey)) {
+                    $value = $d->{$getter}();
+                    
+                    if ($value !== null) {
+                        $searchIdsIndexed[$value] = true;
+                    }
+                }
+            }
+
+            $searchIds = array_keys($searchIdsIndexed);
+
+            if (empty($searchIds)) {
+                continue;
+            }
+
+            $qb = $this->db->getQueryBuilder();
+            $qb->select($fields)
+                ->from($table)
+                ->where($qb->expr()->in(
+                    'id',
+                    $qb->createNamedParameter($searchIds, IQueryBuilder::PARAM_INT_ARRAY)
+                ));
+
+            $result = $qb->executeQuery();
+            $indexedResult = [];
+
+            while ($row = $result->fetch()) {
+                $indexedResult[(int)$row['id']] = $row;
+            }
+
+            $result->closeCursor();
+
+            if (isset($relationData['with']) && !empty($indexedResult)) {
+                $indexedResult = $this->loadNestedRelations($indexedResult, $relationData['with']);
+            }
+
+            $relations[$relationName] = $indexedResult;
+        }
+
+        return $relations;
+    }
+
+    private function resolveFilterType(string $dbType): string {
+        return match ($dbType) {
+            'VARCHAR', 'TEXT' => 'like',
+            'BIGINT', 'INTEGER', 'INT' => 'in',
+            'DECIMAL', 'FLOAT', 'DOUBLE' => 'numericFromTo',
+            'DATE', 'DATETIME', 'TIMESTAMP' => 'dateFromTo',
+            default => 'in',
+        };
+    }
+
+    /**
+     * Sort key (as sent by the frontend) => ['entity' => class-string<ISortableEntity>, 'localKey' => fk column].
+     * Override in the concrete Mapper.
+     *
+     * @return array<string, array{entity: class-string<ISortableEntity>, localKey: string}>
+     */
+    protected function getRelationSorts(): array {
+        return [];
+    }
+}
