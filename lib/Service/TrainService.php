@@ -187,7 +187,7 @@ class TrainService
      * endlos gültig ist (valid_until = NULL) oder das Ablaufdatum außerhalb
      * des "Bald fällig"-Fensters liegt.
      */
-    private function isFulfilled(?object $passedRun, \DateTimeImmutable $now): bool
+    public function isFulfilled(?object $passedRun, \DateTimeImmutable $now): bool
     {
         if ($passedRun === null) {
             return false;

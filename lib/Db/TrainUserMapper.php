@@ -47,6 +47,17 @@ class TrainUserMapper extends EntityMapperAbstract {
         return $this->findEntity($qb);
     }
 
+    /** @return TrainUser[] */
+    public function findByTrainId(int $trainId): array
+    {
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where($qb->expr()->eq('train_id', $qb->createNamedParameter($trainId, IQueryBuilder::PARAM_INT)));
+
+        return $this->findEntities($qb);
+    }
+
     protected function getDefaultSortField(): string {
         return 'user_id';
     }

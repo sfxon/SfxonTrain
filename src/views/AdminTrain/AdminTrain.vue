@@ -3,7 +3,7 @@
 import { computed } from 'vue'
 import { loadState } from '@nextcloud/initial-state'
 import { generateUrl } from '@nextcloud/router'
-import { mdiFileDocumentEdit } from '@mdi/js'
+import { mdiAccountGroup, mdiFileDocumentEdit } from '@mdi/js'
 import NcAppContent from '@nextcloud/vue/components/NcAppContent'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcContent from '@nextcloud/vue/components/NcContent'
@@ -50,6 +50,13 @@ const columns = [
                 visible: (row: Record<string, unknown>) => row.currentVersionId != null,
                 callback: (row: Record<string, unknown>) => window.location.assign(
                     generateUrl('/apps/sfxontrain/admin/train/{trainId}/content', { trainId: row.id as number }),
+                ),
+            },
+            {
+                label: 'Teilnehmer & Zertifikate',
+                icon: mdiAccountGroup,
+                callback: (row: Record<string, unknown>) => window.location.assign(
+                    generateUrl('/apps/sfxontrain/admin/train/{trainId}/participants', { trainId: row.id as number }),
                 ),
             },
         ],

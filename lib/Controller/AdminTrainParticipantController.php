@@ -85,10 +85,18 @@ class AdminTrainParticipantController extends Controller
         return new TemplateResponse(Application::APP_ID, 'admin-train-participants');
     }
 
+    /**
+     * Liefert das Zertifikat EINES bestandenen Durchlaufs. Das ZIP für den
+     * Sammel-Export setzt die Vue-Seite aus diesen Einzelabrufen zusammen.
+     */
     #[NoCSRFRequired]
     #[OpenAPI(OpenAPI::SCOPE_IGNORE)]
-    #[FrontpageRoute(verb: 'GET', url: '/api/admin/train/{trainId}/certificates', requirements: ['trainId' => '\d+'])]
-    public function exportCertificates(int $trainId): Response
+    #[FrontpageRoute(
+        verb: 'GET',
+        url: '/api/admin/train/{trainId}/runs/{runId}/certificate',
+        requirements: ['trainId' => '\d+', 'runId' => '\d+'],
+    )]
+    public function certificate(int $trainId, int $runId): Response
     {
         $train = $this->findTrain($trainId);
         if ($train === null) {
@@ -96,18 +104,21 @@ class AdminTrainParticipantController extends Controller
         }
 
         $version = $this->trainVersionMapper->getCurrentTrainingVersions([$train])[$train->getId()] ?? null;
-        $title = $version?->getTitle() ?? 'Schulung';
 
-        $zip = $this->participantService->buildCertificateArchive($trainId, $title);
-        if ($zip === null) {
-            // Es gibt noch keine bestandenen Durchläufe.
+        $pdf = $this->participantService->renderCertificate(
+            $trainId,
+            $runId,
+            $version?->getTitle() ?? 'Schulung',
+        );
+        if ($pdf === null) {
             return new NotFoundResponse();
         }
 
-        $safeTitle = trim((string) preg_replace('/[^\p{L}\p{N}._-]+/u', '_', $title), '_');
-        $filename = sprintf('Zertifikate_%d_%s.zip', $trainId, $safeTitle !== '' ? $safeTitle : 'Schulung');
-
-        return new DataDownloadResponse($zip, $filename, 'application/zip');
+        return new DataDownloadResponse(
+            $pdf,
+            sprintf('Zertifikat_%d_%d.pdf', $trainId, $runId),
+            'application/pdf',
+        );
     }
 
     private function findTrain(int $trainId): ?Train
