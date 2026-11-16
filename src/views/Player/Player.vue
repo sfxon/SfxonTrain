@@ -15,10 +15,10 @@ import CheckCircle from 'vue-material-design-icons/CheckCircle.vue'
 import ChevronLeft from 'vue-material-design-icons/ChevronLeft.vue'
 import CircleOutline from 'vue-material-design-icons/CircleOutline.vue'
 
-import ContentBlock from './ContentBlock.vue'
-import QuizBlock from './QuizBlock.vue'
-import { errorMessage, finishRun, saveProgress, startRun, submitAnswer } from './Api'
-import type { AnswerResult, ClientPage, FinishResult, PlayerState } from './Types'
+import ContentBlock from '@/components/Player/ContentBlock.vue'
+import QuizBlock from '@/components/Player/QuizBlock.vue'
+import { errorMessage, finishRun, saveProgress, startRun, submitAnswer } from '@/components/Player/Api'
+import type { AnswerResult, ClientPage, FinishResult, PlayerState } from '@/components/Player/Types'
 
 const APP_ID = 'sfxontrain'
 
@@ -50,10 +50,21 @@ function scoredQuestionIds(p: ClientPage): string[] {
     return p.sections.flatMap((s) => (s.type === 'quiz' && s.scored ? s.questions.map((q) => q.id) : []))
 }
 
+function questionIds(p: ClientPage): string[] {
+    return p.sections.flatMap((s) => (s.type === 'quiz' ? s.questions.map((q) => q.id) : []))
+}
+
+function isPageAnswered(p: ClientPage): boolean {
+    return questionIds(p).every((id) => id in answers)
+}
+
 /** Seite gilt als erledigt: gesehen und alle zählenden Fragen beantwortet. */
 function isPageDone(p: ClientPage): boolean {
     return visited.value.includes(p.id) && scoredQuestionIds(p).every((id) => id in answers)
 }
+
+const openOnPageCount = computed(() => questionIds(page.value).filter((id) => !(id in answers)).length)
+const canContinue = computed(() => openOnPageCount.value === 0)
 
 const openQuestionCount = computed(() =>
     pages.reduce((sum, p) => sum + scoredQuestionIds(p).filter((id) => !(id in answers)).length, 0),
@@ -75,6 +86,10 @@ function goTo(target: number): void {
         return
     }
 
+    if (target > index.value && !pages.slice(index.value, target).every(isPageAnswered)) {
+        return
+    }
+
     index.value = target
     const pageId = pages[target].id
     if (!visited.value.includes(pageId)) {
@@ -86,6 +101,10 @@ function goTo(target: number): void {
 }
 
 async function onAnswer(questionId: string, selected: string[]): Promise<void> {
+    if (questionId in answers) {
+        return
+    }
+
     submittingId.value = questionId
     try {
         answers[questionId] = await submitAnswer(run.id, questionId, selected)
@@ -94,10 +113,6 @@ async function onAnswer(questionId: string, selected: string[]): Promise<void> {
     } finally {
         submittingId.value = null
     }
-}
-
-function onReset(questionId: string): void {
-    delete answers[questionId]
 }
 
 async function onFinish(): Promise<void> {
@@ -128,13 +143,16 @@ async function onRetry(): Promise<void> {
     <NcContent :app-name="APP_ID">
         <NcAppContent :class="$style.content">
             <div :class="$style.player">
+                <!--
                 <header :class="$style.header">
+                    
                     <NcButton variant="tertiary" :href="overviewUrl">
                         <template #icon>
                             <ArrowLeft :size="20" />
                         </template>
                         Zur Übersicht
                     </NcButton>
+                    
                     <h1 :class="$style.title">{{ training.title }}</h1>
                     <div v-if="!result" :class="$style.progress">
                         <div :class="$style.progressLabel">
@@ -144,6 +162,7 @@ async function onRetry(): Promise<void> {
                         <NcProgressBar :value="percent" size="medium" />
                     </div>
                 </header>
+                -->
 
                 <!-- Ergebnis -->
                 <section v-if="result" :class="$style.result" aria-live="polite">
@@ -170,6 +189,7 @@ async function onRetry(): Promise<void> {
 
                 <!-- Player -->
                 <div v-else :class="$style.layout">
+                    <!--
                     <nav :class="$style.nav" aria-label="Seitenübersicht">
                         <ol :class="$style.navList">
                             <li v-for="(p, i) in pages" :key="p.id">
@@ -185,9 +205,10 @@ async function onRetry(): Promise<void> {
                             </li>
                         </ol>
                     </nav>
+                -->
 
                     <article ref="articleRef" :class="$style.article">
-                        <h2 :class="$style.pageTitle">{{ page.title }}</h2>
+                        <!-- <h2 :class="$style.pageTitle">{{ page.title }}</h2> -->
 
                         <template v-for="s in page.sections" :key="s.id">
                             <ContentBlock v-if="s.type === 'content'" :section="s" />
@@ -196,9 +217,9 @@ async function onRetry(): Promise<void> {
                                 :section="s"
                                 :answers="answers"
                                 :submitting-id="submittingId"
-                                @answer="onAnswer"
-                                @reset="onReset" />
+                                @answer="onAnswer" />
                         </template>
+                    
 
                         <footer :class="$style.footer">
                             <NcButton variant="secondary" :disabled="isFirst" @click="goTo(index - 1)">
@@ -208,18 +229,26 @@ async function onRetry(): Promise<void> {
                                 Zurück
                             </NcButton>
 
-                            <p v-if="isLast && openQuestionCount > 0" :class="$style.hint">
+                            <p v-if="!canContinue" :class="$style.hint">
+                                Bitte beantworte zuerst {{ openOnPageCount === 1 ? 'die offene Frage' : `die ${openOnPageCount} offenen Fragen` }}
+                                auf dieser Seite.
+                            </p>
+                            <p v-else-if="isLast && openQuestionCount > 0" :class="$style.hint">
                                 Es fehlen noch {{ openQuestionCount }}
                                 {{ openQuestionCount === 1 ? 'Antwort' : 'Antworten' }} auf zählende Fragen.
                             </p>
 
-                            <NcButton v-if="!isLast" variant="primary" @click="goTo(index + 1)">
+                            <NcButton
+                                v-if="!isLast"
+                                variant="primary"
+                                :disabled="!canContinue"
+                                @click="goTo(index + 1)">
                                 Weiter
                             </NcButton>
                             <NcButton
                                 v-else
                                 variant="primary"
-                                :disabled="openQuestionCount > 0 || finishing"
+                                :disabled="!canContinue || openQuestionCount > 0 || finishing"
                                 @click="onFinish">
                                 Schulung abschließen
                             </NcButton>
@@ -232,6 +261,16 @@ async function onRetry(): Promise<void> {
 </template>
 
 <style module>
+:global(header) :global(.app-menu) {
+    display: none!important;
+}
+
+:global(header) :global(.header-end) :global(.unified-search-menu),
+:global(header) :global(.header-end) :global(#notifications),
+:global(header) :global(.header-end) :global(.contactsmenu) {
+    display: none!important;
+}
+
 .content {
     display: flex;
     justify-content: center;
@@ -239,7 +278,7 @@ async function onRetry(): Promise<void> {
 }
 
 .player {
-    margin-top: 2rem;
+    /*margin-top: 2rem;*/
     max-width: 1400px;
     width: 100%;
 }
@@ -279,12 +318,14 @@ async function onRetry(): Promise<void> {
     color: var(--color-main-text);
 }
 
+/*
 .layout {
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     gap: 32px;
     align-items: start;
 }
+*/
 
 .nav {
     position: sticky;

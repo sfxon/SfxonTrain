@@ -3,14 +3,13 @@ import { ref } from 'vue'
 import { showError } from '@nextcloud/dialogs'
 import { loadState } from '@nextcloud/initial-state'
 
+import { generateUrl } from '@nextcloud/router'
 import NcAppContent from '@nextcloud/vue/components/NcAppContent'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import NcChip from '@nextcloud/vue/components/NcChip'
 import NcContent from '@nextcloud/vue/components/NcContent'
 import NcProgressBar from '@nextcloud/vue/components/NcProgressBar'
-
-import { errorMessage, startRun } from './components/Player/Api'
-
+import { errorMessage, startRun } from '@/components/Player/Api'
 import AlertOutline from 'vue-material-design-icons/AlertOutline.vue'
 import CheckCircleOutline from 'vue-material-design-icons/CheckCircleOutline.vue'
 import ClockOutline from 'vue-material-design-icons/ClockOutline.vue'
@@ -37,6 +36,7 @@ interface OpenTraining {
 
 interface CompletedTraining {
     id: number
+    runId: number
     category: string
     title: string
     statusLabel: string
@@ -61,6 +61,7 @@ const STATUS = {
     new: { variant: 'secondary', icon: InformationOutline },
 } as const
 
+const isTrainAdmin = loadState(APP_ID, 'isTrainAdmin', false)
 const openTrainings = loadState<OpenTraining[]>(APP_ID, 'trainings', [])
 const completedTrainings = loadState<CompletedTraining[]>(APP_ID, 'completed', [])
 const stats = loadState<Stats>(APP_ID, 'stats', { open: 0, overdue: 0, completed: 0 })
@@ -105,6 +106,10 @@ function actionLabel(t: OpenTraining): string {
 
 const startingId = ref<number | null>(null)
 
+function onForwardToAdmin() {
+    window.location.assign(generateUrl(`/apps/sfxontrain/admin/train/`))
+}
+
 async function onStart(training: OpenTraining): Promise<void> {
     startingId.value = training.id
     try {
@@ -117,8 +122,9 @@ async function onStart(training: OpenTraining): Promise<void> {
 }
 
 function onDownload(training: CompletedTraining): void {
-    // TODO: Nachweis-PDF herunterladen
-    console.debug('download', training.id)
+    window.location.assign(
+        generateUrl(`/apps/sfxontrain/api/runs/${training.runId}/certificate`),
+    )
 }
 </script>
 
@@ -126,13 +132,18 @@ function onDownload(training: CompletedTraining): void {
     <NcContent :app-name="APP_ID">
         <NcAppContent :class="$style.content">
             <div :class="$style.page">
-                <!-- Kopfzeile + Kennzahlen -->
+                <div :class="$style.adminBar">
+                    <NcButton
+                        variant="secondary"
+                        @click="onForwardToAdmin()"
+                        v-if="isTrainAdmin">
+                        Zum Admin wechseln
+                    </NcButton>
+                </div>
+
                 <header :class="$style.header">
                     <div>
-                        <h1 :class="$style.pageTitle">Meine Schulungen</h1>
-                        <p :class="$style.subtitle">
-                            Alle Unterweisungen, die dir zugewiesen sind – offene zuerst.
-                        </p>
+                        <h1 :class="$style.pageTitle">Meine Unterweisungen</h1>
                     </div>
 
                     <ul :class="$style.stats">
@@ -140,7 +151,7 @@ function onDownload(training: CompletedTraining): void {
                             <span :class="$style.statValue">{{ stats.open }}</span>
                             <span :class="$style.statLabel">Zu erledigen</span>
                         </li>
-                        <li :class="[$style.stat, $style.statError]">
+                        <li :class="[$style.stat]">
                             <span :class="$style.statValue">{{ stats.overdue }}</span>
                             <span :class="$style.statLabel">davon überfällig</span>
                         </li>
@@ -153,13 +164,12 @@ function onDownload(training: CompletedTraining): void {
 
                 <!-- Zu erledigen -->
                 <section aria-labelledby="open-heading">
-                    <h2 id="open-heading" :class="$style.sectionTitle">
-                        Zu erledigen
-                        <span :class="$style.count">{{ openTrainings.length }}</span>
+                    <h2 id="open-heading" :class="[$style.sectionTitle, $style.sectionTitleOpenHeading]">
+                        Zu erledigen ({{ openTrainings.length }})
                     </h2>
 
                     <p v-if="openTrainings.length === 0" :class="$style.empty">
-                        Dir sind aktuell keine Schulungen zugewiesen.
+                        Alle Unterweisungen wurden absolviert.
                     </p>
 
                     <div v-else :class="$style.grid">
@@ -218,9 +228,8 @@ function onDownload(training: CompletedTraining): void {
 
                 <!-- Absolviert -->
                 <section v-if="completedTrainings.length > 0" aria-labelledby="done-heading">
-                    <h2 id="done-heading" :class="$style.sectionTitle">
-                        Absolviert
-                        <span :class="$style.count">{{ completedTrainings.length }}</span>
+                    <h2 id="done-heading" :class="[$style.sectionTitle, $style.sectionTitleCompletedTrainings]">
+                        Absolviert ({{ completedTrainings.length }})
                     </h2>
 
                     <div :class="$style.grid">
@@ -275,6 +284,26 @@ function onDownload(training: CompletedTraining): void {
 </template>
 
 <style module>
+:global(header) :global(.app-menu) {
+    display: none!important;
+}
+
+:global(header) :global(.header-end) :global(.unified-search-menu),
+:global(header) :global(.header-end) :global(#notifications),
+:global(header) :global(.header-end) :global(.contactsmenu) {
+    display: none!important;
+}
+
+.adminBar {
+    margin-bottom: 6px;
+    text-align: right;
+}
+
+.adminBar :global(button) {
+    margin-left: auto;
+    margin-right: 0;
+}
+
 .content {
     display: flex;
     justify-content: center;
@@ -355,18 +384,8 @@ function onDownload(training: CompletedTraining): void {
     font-weight: 700;
 }
 
-.count {
-    padding: 0 10px;
-    border-radius: var(--border-radius-pill);
-    background: var(--color-background-dark);
-    font-size: var(--font-size-small, 13px);
-    font-weight: 600;
-    line-height: 24px;
-    color: var(--color-text-maxcontrast);
-}
-
 .empty {
-    margin: 0;
+    margin: 0 0 2rem;
     color: var(--color-text-maxcontrast);
 }
 
@@ -379,11 +398,11 @@ function onDownload(training: CompletedTraining): void {
 .card {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 6px;
     padding: 16px;
     border: 1px solid var(--color-border);
     border-radius: var(--border-radius-large);
-    background: var(--color-main-background);
+    background: #EEE;
 }
 
 .cardDone {
@@ -497,5 +516,32 @@ function onDownload(training: CompletedTraining): void {
         flex: 1;
         min-width: 0;
     }
+}
+
+.metaRow :global(dt) {
+    padding: 0;
+    text-align: start;
+    width: auto;
+}
+
+.metaRow :global(dd) {
+    padding: 0;
+}
+
+.sectionTitleCompletedTrainings {
+    padding: 12px;
+    background-color: #065f20;
+    color: #FFF;
+}
+
+.sectionTitleOpenHeading {
+    padding: 12px;
+    background-color: #e7b24d;
+    color: #FFF;
+}
+
+:global(.nc-chip) :global(.nc-chip__text) {
+    font-size: 12px!important;
+    font-weight: bold!important;
 }
 </style>

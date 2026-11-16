@@ -15,6 +15,7 @@
   ],
   "dependencies": {
     "@nextcloud/vue": "^9.8.2",
+    "jsbarcode": "^3.12.3",
     "vue": "^3.5.35"
   },
   "devDependencies": {

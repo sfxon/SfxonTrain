@@ -26,10 +26,12 @@ defineProps<{
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/*
 .rich {
     max-width: 75ch;
     line-height: 1.6;
 }
+*/
 
 .rich > :first-child {
     margin-top: 0;

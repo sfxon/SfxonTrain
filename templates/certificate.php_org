@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @page { margin: 28mm 25mm; }
+        body {
+            font-family: "DejaVu Sans", sans-serif;
+            color: #17243a;
+            text-align: center;
+        }
+        .frame {
+            border: 3px solid #245b9e;
+            padding: 32px 42px;
+            height: 125mm;
+        }
+        .eyebrow {
+            color: #245b9e;
+            font-size: 12px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 8px;
+        }
+        h1 { font-size: 34px; margin: 18px 0 28px; }
+        .intro { font-size: 16px; }
+        .name {
+            font-size: 30px;
+            font-weight: bold;
+            margin: 22px 0;
+            color: #245b9e;
+        }
+        .training { font-size: 21px; font-weight: bold; margin: 18px 0; }
+        .details { margin-top: 30px; font-size: 12px; color: #526174; }
+        .rule { width: 55%; border-top: 1px solid #aab8c8; margin: 0 auto; }
+        .footer { margin-top: 34px; font-size: 10px; color: #718096; }
+    </style>
+</head>
+<body>
+<div class="frame">
+    <div class="eyebrow">Teilnahme- und Erfolgsnachweis</div>
+    <h1>Zertifikat</h1>
+    <div class="intro">Hiermit wird bestätigt, dass</div>
+    <div class="name"><?= $participantName ?></div>
+    <div class="intro">die Schulung</div>
+    <div class="training"><?= $trainingTitle ?></div>
+    <div class="intro">erfolgreich abgeschlossen hat.</div>
+
+    <div class="details">
+        <p>Abgeschlossen am: <strong><?= $completedAt ?></strong></p>
+        <?php if ($scorePercent !== null): ?>
+            <p>Ergebnis: <strong><?= $scorePercent ?> %</strong></p>
+        <?php endif; ?>
+        <?php if ($versionNumber !== null): ?>
+            <p>Trainingsversion: <?= $versionNumber ?></p>
+        <?php endif; ?>
+    </div>
+
+    <div class="footer">
+        Automatisch durch SfxonTrain erstellt.
+    </div>
+</div>
+</body>
+</html>

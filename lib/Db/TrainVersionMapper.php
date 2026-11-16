@@ -28,15 +28,17 @@ class TrainVersionMapper extends EntityMapperAbstract {
      * @param Train[] $trainings
      * @return array<int, TrainVersion> indiziert nach train_id
      */
-    public function getCurrentTrainingVersions(array $trainings): array
-    {
+    public function getCurrentTrainingVersions(array $trainings): array {
         $versionIds = [];
+
         foreach ($trainings as $training) {
             $versionId = $training->getCurrentVersionId();
+
             if ($versionId !== null) {
-                $versionIds[] = (int)$versionId;
+                $versionIds[] = (int) $versionId;
             }
         }
+
         $versionIds = array_values(array_unique($versionIds));
 
         if ($versionIds === []) {

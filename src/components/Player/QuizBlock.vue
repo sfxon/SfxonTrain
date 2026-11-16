@@ -15,7 +15,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     answer: [questionId: string, selected: string[]]
-    reset: [questionId: string]
 }>()
 
 /** Noch nicht abgeschickte Auswahl je Frage. */
@@ -71,12 +70,10 @@ function optionTag(questionId: string, optionId: string): string {
 }
 
 function submit(question: ClientQuestion): void {
+    if (result(question.id)) {
+        return
+    }
     emit('answer', question.id, current(question.id))
-}
-
-function reset(questionId: string): void {
-    selection[questionId] = []
-    emit('reset', questionId)
 }
 
 function pointsLabel(r: AnswerResult): string {
@@ -155,9 +152,6 @@ function pointsLabel(r: AnswerResult): string {
                     :disabled="current(q.id).length === 0 || submittingId === q.id"
                     @click="submit(q)">
                     Antwort prüfen
-                </NcButton>
-                <NcButton v-else-if="!section.scored" variant="tertiary" @click="reset(q.id)">
-                    Nochmal versuchen
                 </NcButton>
             </div>
         </fieldset>

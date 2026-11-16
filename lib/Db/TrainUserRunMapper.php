@@ -2,6 +2,7 @@
 
 namespace OCA\SfxonTrain\Db;
 
+use OCA\SfxonTrain\Service\TrainStatus;
 use OCP\AppFramework\Db\DoesNotExistException;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\IDBConnection;
@@ -29,7 +30,10 @@ class TrainUserRunMapper extends EntityMapperAbstract {
         $qb = $this->db->getQueryBuilder();
         $qb->select('*')
             ->from($this->getTableName())
-            ->where($qb->expr()->eq('id', $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)));
+            ->where($qb->expr()->eq(
+                'id',
+                $qb->createNamedParameter($id, IQueryBuilder::PARAM_INT)
+            ));
 
         return $this->findEntity($qb);
     }
@@ -39,7 +43,10 @@ class TrainUserRunMapper extends EntityMapperAbstract {
         $qb = $this->db->getQueryBuilder();
         $qb->select('*')
             ->from($this->getTableName())
-            ->where($qb->expr()->eq('train_user_id', $qb->createNamedParameter($trainUserId, IQueryBuilder::PARAM_INT)))
+            ->where($qb->expr()->eq(
+                'train_user_id',
+                $qb->createNamedParameter($trainUserId, IQueryBuilder::PARAM_INT)
+            ))
             ->andWhere($qb->expr()->isNull('finished_at'))
             ->orderBy('id', 'DESC')
             ->setMaxResults(1);
@@ -63,7 +70,10 @@ class TrainUserRunMapper extends EntityMapperAbstract {
         $qb = $this->db->getQueryBuilder();
         $qb->select('*')
             ->from($this->getTableName())
-            ->where($qb->expr()->in('train_user_id', $qb->createNamedParameter($trainUserIds, IQueryBuilder::PARAM_INT_ARRAY)))
+            ->where($qb->expr()->in(
+                'train_user_id',
+                $qb->createNamedParameter($trainUserIds, IQueryBuilder::PARAM_INT_ARRAY)
+            ))
             ->andWhere($qb->expr()->isNull('finished_at'))
             ->orderBy('id', 'ASC');
 
@@ -75,11 +85,43 @@ class TrainUserRunMapper extends EntityMapperAbstract {
         return $byTrainUser;
     }
 
+    public function findPassedByTrainUserIds(array $trainUserIds): array {
+        if ($trainUserIds === []) {
+            return [];
+        }
+
+        $qb = $this->db->getQueryBuilder();
+        $qb->select('*')
+            ->from($this->getTableName())
+            ->where($qb->expr()->in(
+                'train_user_id',
+                $qb->createNamedParameter(
+                    $trainUserIds,
+                    IQueryBuilder::PARAM_INT_ARRAY
+                )
+            ))
+            ->andWhere($qb->expr()->eq(
+                'status',
+                $qb->createNamedParameter(
+                    TrainStatus::RUN_PASSED,
+                    IQueryBuilder::PARAM_INT
+                )
+            ))
+            ->andWhere($qb->expr()->isNotNull('finished_at'))
+            ->orderBy('finished_at', 'DESC')
+            ->addOrderBy('id', 'DESC');
+
+        return $this->findEntities($qb);
+    }
+
     public function countByTrainUser(int $trainUserId): int {
         $qb = $this->db->getQueryBuilder();
         $qb->select($qb->func()->count('*', 'cnt'))
             ->from($this->getTableName())
-            ->where($qb->expr()->eq('train_user_id', $qb->createNamedParameter($trainUserId, IQueryBuilder::PARAM_INT)));
+            ->where($qb->expr()->eq(
+                'train_user_id',
+                $qb->createNamedParameter($trainUserId, IQueryBuilder::PARAM_INT)
+            ));
 
         $result = $qb->executeQuery();
         $count = (int) $result->fetchOne();

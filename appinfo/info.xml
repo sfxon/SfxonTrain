@@ -40,7 +40,7 @@ The app is free to use.</description>
 		<navigation>
 			<id>sfxontrain</id>
 			<name>Sfxon Train</name>
-			<route>sfxontrain.page.index</route>
+			<route>sfxontrain.dashboard.index</route>
 			<icon>app.svg</icon>
 			<type>link</type>
 		</navigation>

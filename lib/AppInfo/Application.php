@@ -10,16 +10,23 @@ use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
 
 class Application extends App implements IBootstrap {
-	public const APP_ID = 'sfxontrain';
+    public const APP_ID = 'sfxontrain';
 
-	/** @psalm-suppress PossiblyUnusedMethod */
-	public function __construct() {
-		parent::__construct(self::APP_ID);
-	}
+    /** @psalm-suppress PossiblyUnusedMethod */
+    public function __construct()
+    {
+        parent::__construct(self::APP_ID);
 
-	public function register(IRegistrationContext $context): void {
-	}
+        $autoloadFile = dirname(__DIR__, 2) . '/vendor/autoload.php';
 
-	public function boot(IBootContext $context): void {
-	}
-}
+        if (is_file($autoloadFile)) {
+            require_once $autoloadFile;
+        }
+    }
+
+    public function register(IRegistrationContext $context): void {
+    }
+
+    public function boot(IBootContext $context): void {
+    }
+    }

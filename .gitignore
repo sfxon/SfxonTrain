@@ -10,3 +10,8 @@
 /node_modules/
 /js/
 /css/
+
+/composer
+/composer.json.backup
+/img/logo-hintergrund.png
+/img/logo-top.png
